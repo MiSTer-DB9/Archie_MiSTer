@@ -346,7 +346,7 @@ always@(posedge clk_sys) begin
 					'h2E: if(byte_cnt == 1) io_dout <= status_menumask;
 
 					// Reading user_io raw joy
-					'h37: io_dout <= joy_raw;
+					'h0f: io_dout <= joy_raw;
 
 					//sdram size set
 					'h31: if(byte_cnt == 1) sdram_sz <= io_din;
