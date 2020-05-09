@@ -129,7 +129,8 @@ assign ADC_BUS  = 'Z;
 
 wire         CLK_JOY = CLK_50M;         //Assign clock between 40-50Mhz
 //wire   [2:0] JOY_FLAG  = {status[30],status[31],status[29]}; //Assign 3 bits of status (31:29) o (63:61)
-wire   [2:0] JOY_FLAG  = 3'b100; // b000:off, b100:DB9MD 1P, b010:DB15 1P, b101:DB9MD 2P, b011:DB15 2P
+//wire   [2:0] JOY_FLAG  = 3'b100; // b000:off, b100:DB9MD 1P, b010:DB15 1P, b101:DB9MD 2P, b011:DB15 2P
+wire   [2:0] JOY_FLAG  = {status[22],status[23],status[21]}; //Assign 3 bits of status (23:21) 
 wire         JOY_CLK, JOY_LOAD, JOY_SPLIT, JOY_MDSEL;
 wire   [5:0] JOY_MDIN  = JOY_FLAG[2] ? {USER_IN[6],USER_IN[3],USER_IN[5],USER_IN[7],USER_IN[1],USER_IN[2]} : '1;
 wire         JOY_DATA  = JOY_FLAG[1] ? USER_IN[5] : '1;
@@ -205,12 +206,10 @@ wire        img_readonly;
 wire [21:0] gamma_bus;
 
 // F1 U D L R 
-//wire [31:0] joyA = joydb_1ena ? (OSD_STATUS? 32'b000000 : {joydb_1[5]|joydb_1[4],joydb_1[3:0]}) : joyA_USB;
-//wire [31:0] joyB = joydb_2ena ? (OSD_STATUS? 32'b000000 : {joydb_2[5]|joydb_2[4],joydb_2[3:0]}) : joydb_1ena ? joyA_USB : joyB_USB;
-
-wire [31:0] joyA = OSD_STATUS? 32'b000000 : {joydb_1[5]|joydb_1[4],joydb_1[3:0]} | joyA_USB;
-wire [31:0] joyB = OSD_STATUS? 32'b000000 : {joydb_2[5]|joydb_2[4],joydb_2[3:0]} | joyB_USB;
-
+wire [31:0] joyA = joydb_1ena ? (OSD_STATUS? 32'b000000 : {joydb_1[5]|joydb_1[4],joydb_1[3:0]}) : joyA_USB;
+wire [31:0] joyB = joydb_2ena ? (OSD_STATUS? 32'b000000 : {joydb_2[5]|joydb_2[4],joydb_2[3:0]}) : joydb_1ena ? joyA_USB : joyB_USB;
+//wire [31:0] joyA = OSD_STATUS? 32'b000000 : {joydb_1[5]|joydb_1[4],joydb_1[3:0]} | joyA_USB;
+//wire [31:0] joyB = OSD_STATUS? 32'b000000 : {joydb_2[5]|joydb_2[4],joydb_2[3:0]} | joyB_USB;
 wire [15:0] joydb_1 = JOY_FLAG[2] ? JOYDB9MD_1 : JOY_FLAG[1] ? JOYDB15_1 : '0;
 wire [15:0] joydb_2 = JOY_FLAG[2] ? JOYDB9MD_2 : JOY_FLAG[1] ? JOYDB15_2 : '0;
 wire        joydb_1ena = |JOY_FLAG[2:1]              ;
