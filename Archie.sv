@@ -64,6 +64,7 @@ module emu
 	// b[0]: osd button
 	output  [1:0] BUTTONS,
 
+	input         CLK_AUDIO, // 24.576 MHz
 	output [15:0] AUDIO_L,
 	output [15:0] AUDIO_R,
 	output        AUDIO_S,   // 1 - signed audio samples, 0 - unsigned
@@ -143,10 +144,10 @@ assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = 0; 
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 
-assign LED_USER  = 0;
+assign LED_USER  = fdd_led;
 assign LED_DISK  = 0;
 assign LED_POWER = 0;
-assign BUTTONS = 0;
+assign BUTTONS   = 0;
 
 assign VIDEO_ARX = status[1] ? 8'd16 : 8'd4;
 assign VIDEO_ARY = status[1] ? 8'd9  : 8'd3; 
@@ -172,6 +173,11 @@ pll pll
 	.locked(pll_ready)
 );
 
+reg initReset_n = 0;
+always @(posedge clk_sys) if(riscos_dl) initReset_n <= 1;
+
+wire reset = status[0] | buttons[1] | RESET | ~initReset_n | riscos_dl;
+
 //////////////////   HPS I/O   ///////////////////
 wire [15:0] joyA_USB;
 wire [15:0] joyB_USB;
@@ -183,13 +189,13 @@ wire        kbd_out_strobe;
 wire  [7:0] kbd_in_data;
 wire        kbd_in_strobe;
 
-wire [64:0] RTC;
-
 wire        ioctl_download;
 wire  [7:0] ioctl_index;
 wire        ioctl_wr;
 wire [24:0] ioctl_addr;
 wire [15:0] ioctl_dout;
+wire [15:0] ioctl_din;
+reg         ioctl_wait = 0;
 
 wire [31:0] sd_lba;
 wire  [1:0] sd_rd;
@@ -257,14 +263,13 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1), .VDNUM(2)) hps_io
 	.new_vmode(new_vmode),
 	.gamma_bus(gamma_bus),
 
-	.RTC(RTC),
-
 	.ioctl_index(ioctl_index),
 	.ioctl_download(ioctl_download),
 	.ioctl_addr(ioctl_addr),
 	.ioctl_dout(ioctl_dout),
 	.ioctl_wr(ioctl_wr),
-	.ioctl_wait(loader_stb),
+	.ioctl_wait(ioctl_wait|loader_stb),
+	.ioctl_din(ioctl_din),
 
 	.sd_lba(sd_lba),
 	.sd_rd(sd_rd),
@@ -282,7 +287,28 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1), .VDNUM(2)) hps_io
 );
 
 wire [35:0] EXT_BUS;
-hps_ext hps_ext(.*);
+hps_ext hps_ext
+(
+	.clk_sys        ( clk_sys        ),
+	.EXT_BUS        ( EXT_BUS        ),
+
+	.kbd_out_data   ( kbd_out_data   ),
+	.kbd_out_strobe ( kbd_out_strobe ),
+	.kbd_in_data    ( kbd_in_data    ),
+	.kbd_in_strobe  ( kbd_in_strobe  ),
+
+	.cmos_cnt       ( cmos_cnt       ),
+
+	.ide_reset      ( reset          ),
+	.ide_req        ( ide_req        ),
+	.ide_ack        ( ide_ack        ),
+	.ide_err        ( ide_err        ),
+	.ide_adr        ( ide_adr        ),
+	.ide_dat_o      ( ide_dat_i      ),
+	.ide_dat_i      ( ide_dat_o      ),
+	.ide_rd         ( ide_rd         ),
+	.ide_we         ( ide_we         )
+);
 
 assign AUDIO_S = 1;
 assign AUDIO_MIX = status[3:2];
@@ -298,68 +324,82 @@ wire [3:0]	core_sel_o;
 wire [2:0]	core_cti_o;
 wire [31:0] core_data_in, core_data_out;
 wire [31:0] ram_data_in;
-wire [26:2] core_address_out;
+wire [23:2] core_address_out;
 
 wire	[1:0]	pixbaseclk_select;
+wire  [1:0] selpix;
 
 wire 			i2c_din, i2c_dout, i2c_clock;
 
-wire reset = status[0] | buttons[1] | ~initReset_n | ioctl_download;
+wire        ide_req;
+wire        ide_ack;
+wire        ide_err;
+wire  [8:0] ide_adr;
+wire [15:0] ide_dat_o;
+wire [15:0] ide_dat_i;
+wire        ide_rd;
+wire        ide_we;
 
-reg initReset_n = 0;
-always @(posedge clk_sys) if(ioctl_download) initReset_n <= 1;
-
-wire [1:0] selpix;
+wire        fdd_led;
 
 archimedes_top #(CLKSYS) ARCHIMEDES
 (
-	.CLKCPU_I	( clk_sys			),
-	.CLKPIX_I	( CLK_VIDEO			),
-	.CEPIX_I	 	( CE_PIXEL			),
-	.SELPIX_O	( selpix				), 
+	.CLKCPU_I	    ( clk_sys        ),
+	.CLKPIX_I	    ( CLK_VIDEO      ),
+	.CEPIX_I	 	    ( CE_PIXEL       ),
+	.SELPIX_O	    ( selpix         ), 
 
-	.CEAUD_I	 	( ceaud  			),
+	.CEAUD_I	 	    ( ceaud          ),
 
-	.RESET_I	   (~ram_ready | reset),
+	.RESET_I	       (~ram_ready | reset),
 
-	.MEM_ACK_I	( core_ack_in		),
-	.MEM_DAT_I	( core_data_in		),
-	.MEM_DAT_O	( core_data_out	),
-	.MEM_ADDR_O	( core_address_out),
-	.MEM_STB_O	( core_stb_out		),
-	.MEM_CYC_O	( core_cyc_out		),
-	.MEM_SEL_O	( core_sel_o		),
-	.MEM_WE_O	( core_we_o			),
-	.MEM_CTI_O  ( core_cti_o      ),
+	.MEM_ACK_I	    ( core_ack_in    ),
+	.MEM_DAT_I	    ( core_data_in   ),
+	.MEM_DAT_O	    ( core_data_out  ),
+	.MEM_ADDR_O	    ( core_address_out),
+	.MEM_STB_O	    ( core_stb_out   ),
+	.MEM_CYC_O	    ( core_cyc_out   ),
+	.MEM_SEL_O	    ( core_sel_o     ),
+	.MEM_WE_O	    ( core_we_o      ),
+	.MEM_CTI_O      ( core_cti_o     ),
 
-	.HSYNC		( core_hs			),
-	.VSYNC		( core_vs			),
+	.HSYNC		    ( core_hs        ),
+	.VSYNC		    ( core_vs        ),
 
-	.VIDEO_R		( core_r				),
-	.VIDEO_G		( core_g				),
-	.VIDEO_B		( core_b				),
-	.VIDEO_EN   ( core_de         ),
+	.VIDEO_R		    ( core_r         ),
+	.VIDEO_G		    ( core_g         ),
+	.VIDEO_B		    ( core_b         ),
+	.VIDEO_EN       ( core_de        ),
 
-	.AUDIO_L		( AUDIO_L			),
-	.AUDIO_R		( AUDIO_R			),
+	.AUDIO_L		    ( AUDIO_L        ),
+	.AUDIO_R		    ( AUDIO_R        ),
 
-	.I2C_DOUT	( i2c_din			),
-	.I2C_DIN		( i2c_dout			),
-	.I2C_CLOCK	( i2c_clock			),
+	.I2C_DOUT	    ( i2c_din        ),
+	.I2C_DIN		    ( i2c_dout       ),
+	.I2C_CLOCK	    ( i2c_clock      ),
 
-	.DEBUG_LED	(    					),
+	.FDD_LED	       ( fdd_led        ),
 
-	.sd_lba       ( sd_lba       ),
-	.sd_rd        ( sd_rd        ),
-	.sd_wr        ( sd_wr        ),
-	.sd_ack       ( sd_ack       ),
-	.sd_buff_addr ( sd_buff_addr ),
-	.sd_buff_dout ( sd_buff_dout ),
-	.sd_buff_din  ( sd_buff_din  ),
-	.sd_buff_wr   ( sd_buff_wr   ),
-	.img_mounted  ( img_mounted  ),
-	.img_size     ( img_size     ),
-	.img_wp       ( img_readonly ),
+	.sd_lba         ( sd_lba         ),
+	.sd_rd          ( sd_rd          ),
+	.sd_wr          ( sd_wr          ),
+	.sd_ack         ( sd_ack         ),
+	.sd_buff_addr   ( sd_buff_addr   ),
+	.sd_buff_dout   ( sd_buff_dout   ),
+	.sd_buff_din    ( sd_buff_din    ),
+	.sd_buff_wr     ( sd_buff_wr     ),
+	.img_mounted    ( img_mounted    ),
+	.img_size       ( img_size       ),
+	.img_wp         ( img_readonly   ),
+
+	.ide_req        ( ide_req        ),
+	.ide_ack        ( ide_ack        ),
+	.ide_err        ( ide_err        ),
+	.ide_adr        ( ide_adr        ),
+	.ide_dat_o      ( ide_dat_o      ),
+	.ide_dat_i      ( ide_dat_i      ),
+	.ide_rd         ( ide_rd         ),
+	.ide_we         ( ide_we         ),
 
 	.KBD_OUT_DATA   ( kbd_out_data   ),
 	.KBD_OUT_STROBE ( kbd_out_strobe ),
@@ -477,13 +517,13 @@ always @(posedge CLK_VIDEO) begin
 	end
 end
 
-wire			ram_ack;
-wire			ram_stb;
-wire			ram_cyc;
-wire			ram_we;
+wire        ram_ack;
+wire        ram_stb;
+wire        ram_cyc;
+wire        ram_we;
 wire  [3:0]	ram_sel;
-wire [25:0] ram_address;
-wire			ram_ready;
+wire [25:2] ram_address;
+wire        ram_ready;
 
 sdram SDRAM
 (
@@ -517,50 +557,93 @@ sdram SDRAM
 	.sd_ready	(ram_ready   )
 );
 
-i2cSlave CMOS
-(
-	.clk		(clk_sys	 ),
-	.rst		(~pll_ready ),
-	.sdaIn	(i2c_din	 ),
-	.sdaOut	(i2c_dout	 ),
-	.scl		(i2c_clock	 ),
-
-	.RTC     (RTC),
-	
-	.dl_addr(cmos_dl_addr),
-	.dl_data(cmos_dl_addr[0] ? ioctl_dout[15:8] : ioctl_dout[7:0]),
-	.dl_wr(|cmos_dl_wr),
-	.dl_en(cmos_dl)
-);
-
 wire riscos_dl = (ioctl_index == 1) && ioctl_download;
 wire cmos_dl   = (ioctl_index == 3) && ioctl_download;
 
-wire [7:0] cmos_dl_addr;
-wire [1:0] cmos_dl_wr;
-
-reg loader_stb = 0;
+reg [21:2] erase_addr;
+reg        loader_stb = 0;
 always @(posedge clk_sys) begin 
-	if (ram_ack) loader_stb <= 0;
+	reg old_dl = 0;
+
+	if(ram_ack) loader_stb <= 0;
 	if(riscos_dl & ioctl_wr) loader_stb <= 1;
 
-	cmos_dl_addr <= cmos_dl_addr + 1'd1;
-	cmos_dl_wr <= {cmos_dl_wr[0],1'b0};
-
-	if(cmos_dl) begin
-		if(ioctl_wr) begin
-			cmos_dl_addr <= ioctl_addr[7:0];
-			cmos_dl_wr <= 1;
+	old_dl <= riscos_dl;
+	if(~old_dl & riscos_dl) begin
+		ioctl_wait <= 1;
+		erase_addr <= 0;
+	end
+	
+	if(ioctl_wait) begin
+		if(ram_ack) begin
+			if(~&erase_addr) erase_addr <= erase_addr + 1'd1;
+			else ioctl_wait <= 0;
 		end
+		if(~loader_stb) loader_stb <= 1;
 	end
 end
 
-assign ram_we		 = riscos_dl ? 1'b1 : core_we_o;
-assign ram_sel		 = riscos_dl ? (ioctl_addr[1] ? 4'b1100 : 4'b0011) : core_sel_o;
-assign ram_address = riscos_dl ? 25'h400000 + {ioctl_addr[23:2],2'b00} : {core_address_out[23:2],2'b00};
-assign ram_stb		 = riscos_dl ? loader_stb : core_stb_out;
-assign ram_cyc		 = riscos_dl ? loader_stb : core_stb_out;
-assign ram_data_in = riscos_dl ? {ioctl_dout,ioctl_dout} : core_data_out;
+assign ram_we      = riscos_dl ? 1'b1 : core_we_o;
+assign ram_sel     = riscos_dl ? (ioctl_wait ? 4'b1111 : ioctl_addr[1] ? 4'b1100 : 4'b0011) : core_sel_o;
+assign ram_address = riscos_dl ? (ioctl_wait ? erase_addr : {2'b01,ioctl_addr[21:2]}) : core_address_out;
+assign ram_stb     = riscos_dl ? loader_stb : core_stb_out;
+assign ram_cyc     = riscos_dl ? loader_stb : core_cyc_out;
+assign ram_data_in = riscos_dl ? (ioctl_wait ? 32'd0 : {ioctl_dout,ioctl_dout}) : core_data_out;
 assign core_ack_in = riscos_dl ? 1'b0 : ram_ack;
+
+
+//////////////////  RTC/CMOS   ///////////////////
+EEPROM_24C0x eeprom
+(
+   .clk(clk_sys),
+	.ce(eep_ce),
+	.reset(reset),
+
+   .SCL(i2c_clock),
+   .SDA_in(i2c_din),
+   .SDA_out(i2c_dout),
+
+   .type_24C01(0),
+   .E_id(0),
+   .WC_n(0),
+
+   .data_from_ram(eep_dout),
+   .data_to_ram(eep_din),
+   .ram_addr(eep_addr),
+   .ram_read(eep_read),
+   .ram_write(eep_write),
+   .ram_done(1)
+);
+
+wire [7:0] eep_din;
+wire [7:0] eep_dout;
+wire [7:0] eep_addr;
+wire       eep_read;
+wire       eep_write;
+
+reg eep_ce;
+always @(posedge clk_sys) begin
+	reg [1:0] cnt;
+	cnt <= cnt + 1'd1;
+	eep_ce <= !cnt;
+end
+
+reg [7:0] cmos_cnt = 0;
+always @(posedge clk_sys) if(eep_ce && eep_write && eep_addr >= 16) cmos_cnt <= cmos_cnt + 1'd1;
+
+dpram_dif #(8,8,7,16,"rtl/cmos.mif") memory
+(
+	.clock     (clk_sys),
+
+	.address_a (eep_addr),
+	.data_a    (eep_din),
+	.wren_a    (eep_write),
+	.q_a       (eep_dout),
+
+	.address_b (ioctl_addr[7:1]),
+	.data_b    (ioctl_dout),
+	.wren_b    (ioctl_wr & cmos_dl),
+	.q_b       (ioctl_din)
+);
 
 endmodule
