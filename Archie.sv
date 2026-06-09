@@ -346,8 +346,8 @@ wire        img_readonly;
 wire [21:0] gamma_bus;
 
 // F1 U D L R 
-wire [31:0] joyA = joydb_1ena ? (OSD_STATUS? 32'b000000 : {joydb_1[5]|joydb_1[4],joydb_1[3:0]}) : joyA_USB;
-wire [31:0] joyB = joydb_2ena ? (OSD_STATUS? 32'b000000 : {joydb_2[5]|joydb_2[4],joydb_2[3:0]}) : joydb_1ena ? joyA_USB : joyB_USB;
+wire [31:0] joyA = joydb_1ena ? (OSD_STATUS? 32'b000000 : joydb_1_mapped[4:0]) : joyA_USB;
+wire [31:0] joyB = joydb_2ena ? (OSD_STATUS? 32'b000000 : joydb_2_mapped[4:0]) : joydb_1ena ? joyA_USB : joyB_USB;
 //wire [31:0] joyA = OSD_STATUS? 32'b000000 : {joydb_1[5]|joydb_1[4],joydb_1[3:0]} | joyA_USB;
 //wire [31:0] joyB = OSD_STATUS? 32'b000000 : {joydb_2[5]|joydb_2[4],joydb_2[3:0]} | joyB_USB;
 
