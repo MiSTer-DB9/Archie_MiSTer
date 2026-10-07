@@ -33,9 +33,11 @@ module vidc #(parameter CLKCPU)
 	input 		  clkpix,
 	input         cepix,
 	output  [1:0] selpix,
+	input         clkaud,
 	
 	// "wishbone" interface
 	input 	 	  rst_i,
+	input 	 	  rst_vid_i,
 	input			  vidw, 	// write to a register.		
 	input  [31:0] cpu_dat,
 
@@ -43,10 +45,13 @@ module vidc #(parameter CLKCPU)
 	input  [31:0] viddat, 
 	input 	 	  vidak,
 	output 		  vidrq,
+	input 	 	  curak,
+	output 		  currq,
 
 	input 	 	  sndak,
 	output 		  sndrq,
 
+	input 	 	  flybk_sys,
 	output 	 	  flybk,
 
 	// video outputs
@@ -100,20 +105,32 @@ reg  [2:0] 		csr_shift_count;
 reg  [7:0] 		csr_data_latch = 8'd0;
 
 // internal data request lines
-wire		currq_int;
-wire		vidrq_int;
+wire        vid_wr;
+wire [31:0] vid_cpu_dat;
+
+vidc_command_fifo VIDEO_COMMANDS
+(
+	.wr_clk   ( clkcpu      ),
+	.wr_rst   ( rst_i       ),
+	.wr_en    ( vidw        ),
+	.wr_data  ( cpu_dat     ),
+	.rd_clk   ( clkpix      ),
+	.rd_rst   ( rst_vid_i   ),
+	.rd_valid ( vid_wr      ),
+	.rd_data  ( vid_cpu_dat )
+);
 
 assign   selpix = vidc_cr[1:0];
 
 vidc_timing TIMING(
 	
-	.clkcpu		( clkcpu		),
-	.wr			( vidw		),
-	.cpu_dat 	( cpu_dat	),
+	.clkcpu		( clkpix		),
+	.wr			( vid_wr		),
+	.cpu_dat 	( vid_cpu_dat	),
 
 	.clkvid		( clkpix		),
 	.cevid		( cepix		),
-	.rst			( rst_i		),
+	.rst			( rst_vid_i	),
 	
 	.o_hsync		( hsync		),
 	.o_vsync		( vsync		),
@@ -126,15 +143,16 @@ vidc_timing TIMING(
 // this module does the math for a DMA channel
 vidc_dmachannel VIDEODMA (
 
-	.rst		   ( flybk | rst_i ),
+	.rst_cpu	   ( flybk_sys | rst_i ),
+	.rst_dev	   ( flybk | rst_vid_i ),
 	.clkcpu		( clkcpu    ),
 	.clkdev		( clkpix    ),
 	.cedev		( cepix     ),
 
 	.cpu_data	( viddat    ),
 	.ak			( vidak     ),
-	.rq			( vidrq_int	),
-	.stall		( ~hsync    ),
+	.rq			( vidrq		),
+	.stall		( 1'b0      ),
 
 	.dev_data	( pix_data  ),
 	.dev_ak		( pix_ack   )
@@ -143,15 +161,16 @@ vidc_dmachannel VIDEODMA (
 // this module does the math for a DMA channel
 vidc_dmachannel #(.FIFO_SIZE(2)) CURSORDMA (
 
-	.rst			( flybk | rst_i ),
+	.rst_cpu		( flybk_sys | rst_i ),
+	.rst_dev		( flybk | rst_vid_i ),
 	.clkcpu		( clkcpu    ),
 	.clkdev		( clkpix    ),
 	.cedev		( cepix     ),
 
 	.cpu_data	( viddat    ),
-	.ak			( vidak     ),
-	.rq			( currq_int ),
-	.stall		( hsync | vidrq_int ),
+	.ak			( curak     ),
+	.rq			( currq     ),
+	.stall		( 1'b0      ),
 
 	.dev_data	( csr_data  ),
 	.dev_ak		( csr_ack   )
@@ -169,9 +188,10 @@ end
 // this module does the math for a DMA channel
 vidc_dmachannel SOUNDDMA (
 
-	.rst			( rst_i     ),
+	.rst_cpu		( rst_i     ),
+	.rst_dev		( rst_i     ),
 	.clkcpu		( clkcpu    ),
-	.clkdev		( clkpix    ),
+	.clkdev		( clkaud    ),
 	.cedev		( ceaud     ),
 	
 	.cpu_data	( viddat    ),
@@ -188,7 +208,7 @@ vidc_audio AUDIOMIXER(
     .cpu_wr     ( vidw      ),
     .cpu_data   ( cpu_dat   ),
     
-    .aud_clk    ( clkpix    ),
+    .aud_clk    ( clkaud    ),
     .aud_ce     ( ceaud     ),
     .aud_rst    ( rst_i     ),
     .aud_data   ( snd_sam_data ),
@@ -228,32 +248,31 @@ localparam  VIDEO_CONTROL 	= 6'b111000;
 localparam  VIDEO_BORDER 	= 6'b010000; 
 localparam  CURSOR_PALETTE = 6'b0100xx; 
 
-// DMA interface control
-// this is in the cpu clock domain. 
-always @(posedge clkcpu) begin
+// Pixel-domain register updates delivered by VIDEO_COMMANDS.
+always @(posedge clkpix) begin
 
 	// register write control.
-	if (vidw == 1'b1) begin 
+	if (vid_wr == 1'b1) begin
 	
-		casex (cpu_dat[31:26])  
+		casex (vid_cpu_dat[31:26])
 					
 			VIDEO_PALETTE: begin // palette registers. 00-3CH
 				
-				vidc_palette[cpu_dat[29:26]] <= cpu_dat[12:0];
+				vidc_palette[vid_cpu_dat[29:26]] <= vid_cpu_dat[12:0];
 				
 			end
 
 			CURSOR_PALETTE: begin // cursor palette
-				if (cpu_dat[27:26] == 2'b00) begin
-					vidc_border <= cpu_dat[12:0];
+				if (vid_cpu_dat[27:26] == 2'b00) begin
+					vidc_border <= vid_cpu_dat[12:0];
 				end else begin 
-					cur_palette[cpu_dat[27:26]] <= cpu_dat[12:0];
+					cur_palette[vid_cpu_dat[27:26]] <= vid_cpu_dat[12:0];
 				end
 			end
 			
 			VIDEO_CONTROL: begin // control register.
 				
-				vidc_cr	<= cpu_dat[15:0];
+				vidc_cr	<= vid_cpu_dat[15:0];
 				
 			end
 
@@ -353,10 +372,6 @@ wire [12:0] vidc_colour = cur_enabled & (csr_lookup != 2'd0) ? cur_palette[csr_l
 wire   hicolour     = (vidc_cr[3:2] == 2'b11) & enabled_d2 & !(cur_enabled & (csr_lookup != 2'd0));
 								
 assign video_en     = border;
-
-// two dma channels share the vidrq. 
-assign vidrq = vidrq_int | currq_int;
-
 
 always @(posedge clkpix) begin
 	reg [3:0] r1,g1,b1,r2,g2,b2;

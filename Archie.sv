@@ -78,6 +78,13 @@ always @(posedge clk_sys) if(riscos_dl) initReset_n <= 1;
 
 wire reset = status[0] | buttons[1] | RESET | ~initReset_n | riscos_dl;
 
+wire video_reset_request = ~ram_ready | reset;
+reg [1:0] video_reset_sync = 2'b11;
+wire video_reset = video_reset_sync[1];
+always @(posedge CLK_VIDEO) begin
+	video_reset_sync <= {video_reset_sync[0], video_reset_request};
+end
+
 //////////////////   HPS I/O   ///////////////////
 wire [15:0] joyA;
 wire [15:0] joyB;
@@ -206,9 +213,11 @@ archimedes_top #(CLKSYS) ARCHIMEDES
 	.CEPIX_I	 	    ( CE_PIXEL       ),
 	.SELPIX_O	    ( selpix         ), 
 
+	.CLKAUD_I	    ( clk_sys        ),
 	.CEAUD_I	 	    ( ceaud          ),
 
 	.RESET_I	       (~ram_ready | reset),
+	.RESET_VIDEO_I ( video_reset     ),
 
 	.MEM_ACK_I	    ( core_ack_in    ),
 	.MEM_DAT_I	    ( core_data_in   ),
@@ -360,7 +369,7 @@ wire [31:0] aratio[4] =
 reg         ceaud;
 reg  [31:0] asum, aclk;
 wire [31:0] asum_next = asum + aclk;
-always @(posedge CLK_VIDEO) begin
+always @(posedge clk_sys) begin
 	reg [31:0] aclk1;
 
 	aclk1 <= (status[5] && pixbaseclk_select == 1) ? 1000000 : aratio[pixbaseclk_select];

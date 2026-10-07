@@ -28,9 +28,11 @@ module archimedes_top #(parameter CLKCPU)
 	input          CEPIX_I,
 	output   [1:0] SELPIX_O,
 
+	input          CLKAUD_I,
 	input          CEAUD_I,
 
 	input          RESET_I,
+	input          RESET_VIDEO_I,
 
 	// cpu wishbone interface.
 	output         MEM_CYC_O,
@@ -126,9 +128,19 @@ wire        cpu_firq;
 
 // video DMA signals.
 wire [31:0] vid_address; // VIDC D31-D0
-wire        vid_flybk; // VIDC FLYBK
+wire        vid_flybk; // VIDC FLYBK, pixel clock domain
+(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+reg [1:0]   vid_flybk_cpu_sync = 2'b11;
+wire        vid_flybk_cpu = vid_flybk_cpu_sync[1];
 wire        vid_req; // VIDC REQ
 wire        vid_ack; // VIDC ACK
+wire        cur_req; // VIDC cursor REQ
+wire        cur_ack; // VIDC cursor ACK
+
+always @(posedge CLKCPU_I) begin
+	if(RESET_I) vid_flybk_cpu_sync <= 2'b11;
+	else        vid_flybk_cpu_sync <= {vid_flybk_cpu_sync[0], vid_flybk};
+end
 
 wire        ioc_cs;
 wire        ioc_ack;
@@ -197,10 +209,11 @@ memc MEMC(
 	.mem_dat_i     ( MEM_DAT_I    ),
 
 	// vidc interface
-	.hsync         ( HSYNC        ),
-	.flybk         ( vid_flybk    ),
+	.flybk         ( vid_flybk_cpu),
 	.vidrq         ( vid_req      ),
 	.vidak         ( vid_ack      ),
+	.currq         ( cur_req      ),
+	.curak         ( cur_ack      ),
 	.sndak         ( snd_ack      ),
 	.sndrq         ( snd_req      ),
 	.vidw          ( vid_we       ),
@@ -221,17 +234,22 @@ vidc #(CLKCPU) VIDC
 	.cepix     ( CEPIX_I   ),
 	.selpix    ( SELPIX_O  ),
 
+	.clkaud    ( CLKAUD_I  ),
 	.ceaud     ( CEAUD_I   ),
 
 	.clkcpu    ( CLKCPU_I  ),
 	.rst_i     ( RESET_I   ),
+	.rst_vid_i ( RESET_VIDEO_I ),
 
 	.cpu_dat   ( cpu_dat_o ),
 
 	// memc
 	.flybk     ( vid_flybk ),
+	.flybk_sys ( vid_flybk_cpu ),
 	.vidak     ( vid_ack   ),
 	.vidrq     ( vid_req   ),
+	.curak     ( cur_ack   ),
+	.currq     ( cur_req   ),
 	.sndak     ( snd_ack   ),
 	.sndrq     ( snd_req   ),
 
@@ -269,7 +287,7 @@ ioc IOC(
 	.clk7m_en      ( ioc_clk7m_en       ),
 
 	.por           ( RESET_I            ),
-	.ir            ( vid_flybk          ),
+	.ir            ( vid_flybk_cpu      ),
 
 	.fh            ( {floppy_firq, floppy_drq}),
 
