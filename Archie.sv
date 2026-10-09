@@ -400,7 +400,7 @@ always @(posedge CLK_VIDEO) begin
 	reg old_sync = 0;
 
 	if(vmode == 7) allow60 <= 1;
-	if(reset) allow60 <= 0;
+	if(video_reset) allow60 <= 0;
 
 	if(video_reset || status[4] || !allow60) vclk_60 <= vratio[vmode];
 	else if(CE_PIXEL) begin
