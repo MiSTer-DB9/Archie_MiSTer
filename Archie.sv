@@ -420,7 +420,7 @@ end
 assign CE_PIXEL  = (status[4] || !allow60) ? cepix_native : cepix_60;
 assign VGA_F1 = 0;
 assign VGA_SL = 0;
-assign VGA_SCALER = 1;
+assign VGA_SCALER = 0;
 
 gamma_fast gamma
 (
