@@ -38,6 +38,8 @@ module vidc #(parameter CLKCPU)
 	// "wishbone" interface
 	input 	 	  rst_i,
 	input 	 	  rst_vid_i,
+	input 	 	  rst_vid_cpu_i,
+	input 	 	  rst_cmd_i,
 	input			  vidw, 	// write to a register.		
 	input  [31:0] cpu_dat,
 
@@ -115,7 +117,7 @@ vidc_command_fifo VIDEO_COMMANDS
 	.wr_en    ( vidw        ),
 	.wr_data  ( cpu_dat     ),
 	.rd_clk   ( clkpix      ),
-	.rd_rst   ( rst_vid_i   ),
+	.rd_rst   ( rst_cmd_i   ),
 	.rd_valid ( vid_wr      ),
 	.rd_data  ( vid_cpu_dat )
 );
@@ -143,7 +145,7 @@ vidc_timing TIMING(
 // this module does the math for a DMA channel
 vidc_dmachannel VIDEODMA (
 
-	.rst_cpu	   ( flybk_sys | rst_i ),
+	.rst_cpu	   ( flybk_sys | rst_i | rst_vid_cpu_i ),
 	.rst_dev	   ( flybk | rst_vid_i ),
 	.clkcpu		( clkcpu    ),
 	.clkdev		( clkpix    ),
@@ -161,7 +163,7 @@ vidc_dmachannel VIDEODMA (
 // this module does the math for a DMA channel
 vidc_dmachannel #(.FIFO_SIZE(2)) CURSORDMA (
 
-	.rst_cpu		( flybk_sys | rst_i ),
+	.rst_cpu		( flybk_sys | rst_i | rst_vid_cpu_i ),
 	.rst_dev		( flybk | rst_vid_i ),
 	.clkcpu		( clkcpu    ),
 	.clkdev		( clkpix    ),

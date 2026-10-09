@@ -11,6 +11,8 @@ set_global_assignment -name VERILOG_FILE rtl/ioc_irq.v
 set_global_assignment -name VERILOG_FILE rtl/ioc.v
 set_global_assignment -name VERILOG_FILE rtl/memc_translator.v
 set_global_assignment -name VERILOG_FILE rtl/memc.v
+set_global_assignment -name VERILOG_FILE rtl/video_pll.v
+set_global_assignment -name VERILOG_FILE rtl/video_pll_profile.v
 set_global_assignment -name VERILOG_FILE rtl/archimedes_top.v
 set_global_assignment -name VERILOG_FILE rtl/hps_ext.v
 set_global_assignment -name SDC_FILE Archie.sdc

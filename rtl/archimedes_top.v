@@ -33,6 +33,8 @@ module archimedes_top #(parameter CLKCPU)
 
 	input          RESET_I,
 	input          RESET_VIDEO_I,
+	input          RESET_VIDEO_CPU_I,
+	input          RESET_COMMAND_I,
 
 	// cpu wishbone interface.
 	output         MEM_CYC_O,
@@ -240,6 +242,8 @@ vidc #(CLKCPU) VIDC
 	.clkcpu    ( CLKCPU_I  ),
 	.rst_i     ( RESET_I   ),
 	.rst_vid_i ( RESET_VIDEO_I ),
+	.rst_vid_cpu_i ( RESET_VIDEO_CPU_I ),
+	.rst_cmd_i ( RESET_COMMAND_I ),
 
 	.cpu_dat   ( cpu_dat_o ),
 
