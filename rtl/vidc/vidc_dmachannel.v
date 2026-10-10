@@ -33,7 +33,8 @@ module vidc_dmachannel
 	input         clkdev,
 	input         cedev,
 
-	input         rst,
+	input         rst_cpu,
+	input         rst_dev,
 		
 	// dma bus
 	input         ak,
@@ -50,27 +51,24 @@ module vidc_dmachannel
 parameter FIFO_SIZE = 3;
 
 // each channel has a fifo of a different size. 
-wire [FIFO_SIZE-1:0]	space;
-wire full;
+wire can_burst;
 
 initial begin 
 	rq	= 0;
 end
 
-vidc_fifo #(.FIFO_SIZE(FIFO_SIZE)) VIDEO_FIFO
+vidc_async_fifo #(.ADDR_WIDTH(FIFO_SIZE)) VIDEO_FIFO
 (
-	.rst    ( rst      ),
-	.wr_clk ( clkcpu   ),
-	.rd_clk ( clkdev   ),
-	.rd_ce  ( cedev    ),
-	.wr_en  ( ak & rq  ),
-	.rd_en  ( dev_ak   ),
+	.wr_clk       ( clkcpu       ),
+	.wr_rst       ( rst_cpu      ),
+	.wr_en        ( ak & rq      ),
+	.wr_data      ( cpu_data     ),
+	.wr_can_burst ( can_burst    ),
 
-	.din    ( cpu_data ),
-	.dout   ( dev_data ),
-
-	.space  ( space    ),
-	.full   ( full     )
+	.rd_clk       ( clkdev       ),
+	.rd_rst       ( rst_dev      ),
+	.rd_en        ( cedev & dev_ak ),
+	.rd_data      ( dev_data     )
 );
 
 // DMA interface control
@@ -79,7 +77,7 @@ always @(posedge clkcpu) begin : block
 	reg [1:0] dma_count;
 	reg rstD, rstD2;
 
-	rstD <= rst;
+	rstD <= rst_cpu;
 	rstD2 <= rstD;
 
 	if (rstD2) begin
@@ -95,7 +93,7 @@ always @(posedge clkcpu) begin : block
 	end
 	// Start DMA only if there is a space at least for 4 items
 	// DMA uses burst with 4 items (8 SDRAM reads)
-	else if(~stall & ((space>=4) | (!space & !full))) begin
+	else if(~stall & can_burst) begin
 		dma_count <= 0;
 		rq <= 1;
 	end
