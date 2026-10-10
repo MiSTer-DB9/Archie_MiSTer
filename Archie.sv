@@ -64,6 +64,16 @@ localparam CONF_STR = {
 wire pll_ready;
 wire clk_mem;
 wire clk_sys;
+wire video_pll_locked;
+wire [63:0] video_reconfig_to_pll;
+wire [63:0] video_reconfig_from_pll;
+wire video_cfg_waitrequest;
+wire video_cfg_write;
+wire [5:0] video_cfg_address;
+wire [31:0] video_cfg_writedata;
+wire [31:0] video_cfg_readdata;
+wire video_cfg_busy;
+wire [1:0] pixbaseclk_select;
 
 pll pll
 (
@@ -77,6 +87,57 @@ reg initReset_n = 0;
 always @(posedge clk_sys) if(riscos_dl) initReset_n <= 1;
 
 wire reset = status[0] | buttons[1] | RESET | ~initReset_n | riscos_dl;
+
+wire core_reset = ~ram_ready | reset;
+wire video_reset_request = core_reset | ~video_pll_locked | video_cfg_busy;
+reg [1:0] video_reset_sync = 2'b11;
+wire video_reset = video_reset_sync[1];
+reg [1:0] video_command_reset_sync = 2'b11;
+wire video_command_reset = video_command_reset_sync[1];
+always @(posedge CLK_VIDEO) begin
+	video_reset_sync <= {video_reset_sync[0], video_reset_request};
+	video_command_reset_sync <= {video_command_reset_sync[0], core_reset};
+end
+
+video_pll VIDEO_PLL
+(
+	.refclk ( CLK_50M          ),
+	.rst    ( reset            ),
+	.outclk ( CLK_VIDEO        ),
+	.locked ( video_pll_locked ),
+	.reconfig_to_pll   ( video_reconfig_to_pll   ),
+	.reconfig_from_pll ( video_reconfig_from_pll )
+);
+
+pll_cfg VIDEO_PLL_CFG
+(
+	.mgmt_clk          ( clk_sys                 ),
+	.mgmt_reset        ( reset                   ),
+	.mgmt_waitrequest  ( video_cfg_waitrequest   ),
+	.mgmt_write        ( video_cfg_write         ),
+	.mgmt_read         ( 1'b0                    ),
+	.mgmt_address      ( video_cfg_address       ),
+	.mgmt_writedata    ( video_cfg_writedata     ),
+	.mgmt_readdata     ( video_cfg_readdata      ),
+	.reconfig_to_pll   ( video_reconfig_to_pll   ),
+	.reconfig_from_pll ( video_reconfig_from_pll )
+);
+
+// VIDC base-clock families 0 and 3 use a 48 MHz parent, family 1 uses
+// 50.35 MHz, and family 2 uses 72 MHz.
+wire [1:0] desired_video_profile = (pixbaseclk_select == 2'd1) ? 2'd1 :
+	                                 (pixbaseclk_select == 2'd2) ? 2'd2 : 2'd0;
+video_pll_profile VIDEO_PLL_PROFILE
+(
+	.clk             ( clk_sys               ),
+	.reset           ( reset                 ),
+	.desired_profile ( desired_video_profile ),
+	.busy            ( video_cfg_busy        ),
+	.write           ( video_cfg_write       ),
+	.address         ( video_cfg_address     ),
+	.writedata       ( video_cfg_writedata   ),
+	.waitrequest     ( video_cfg_waitrequest )
+);
 
 //////////////////   HPS I/O   ///////////////////
 wire [15:0] joyA;
@@ -184,8 +245,17 @@ wire [31:0] core_data_in, core_data_out;
 wire [31:0] ram_data_in;
 wire [23:2] core_address_out;
 
-wire	[1:0]	pixbaseclk_select;
 wire  [1:0] selpix;
+
+(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+reg [1:0] pixbaseclk_video_sync1 = 0;
+(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+reg [1:0] pixbaseclk_video_sync2 = 0;
+wire [1:0] pixbaseclk_video = pixbaseclk_video_sync2;
+always @(posedge CLK_VIDEO) begin
+	pixbaseclk_video_sync1 <= pixbaseclk_select;
+	pixbaseclk_video_sync2 <= pixbaseclk_video_sync1;
+end
 
 wire 			i2c_din, i2c_dout, i2c_clock;
 
@@ -206,9 +276,13 @@ archimedes_top #(CLKSYS) ARCHIMEDES
 	.CEPIX_I	 	    ( CE_PIXEL       ),
 	.SELPIX_O	    ( selpix         ), 
 
+	.CLKAUD_I	    ( clk_sys        ),
 	.CEAUD_I	 	    ( ceaud          ),
 
-	.RESET_I	       (~ram_ready | reset),
+	.RESET_I	       ( core_reset          ),
+	.RESET_VIDEO_I ( video_reset         ),
+	.RESET_VIDEO_CPU_I ( video_reset_request ),
+	.RESET_COMMAND_I ( video_command_reset ),
 
 	.MEM_ACK_I	    ( core_ack_in    ),
 	.MEM_DAT_I	    ( core_data_in   ),
@@ -276,33 +350,59 @@ wire [31:0] vratio[16] =
 	8000000, 12000000, 16000000, 24000000
 };
 
-wire [3:0] vmode = {pixbaseclk_select,selpix};
+wire [3:0] vmode = {pixbaseclk_video,selpix};
 
 localparam  CLKSYS = 42000000;
 
-reg         cepix;
-reg  [31:0] vclk, vsum;
-wire [31:0] vsum_next = vsum + vclk;
+reg         cepix_native = 0;
+reg  [2:0]  pixel_count = 0;
+wire [2:0]  pixel_divisor = (selpix == 2'd0) ? 3'd6 :
+	                            (selpix == 2'd1) ? 3'd4 :
+	                            (selpix == 2'd2) ? 3'd3 : 3'd2;
+wire [31:0] video_clock_hz = (pixbaseclk_video == 2'd1) ? 32'd50350000 :
+	                           (pixbaseclk_video == 2'd2) ? 32'd72000000 :
+	                                                                 32'd48000000;
 always @(posedge CLK_VIDEO) begin
-	cepix <= 0;
-	vsum <= vsum_next;
-	if(vsum_next >= CLKSYS) begin
-		vsum <= vsum_next - CLKSYS;
-		cepix <= 1;
+	if(video_reset) begin
+		cepix_native <= 0;
+		pixel_count <= 0;
+	end else begin
+		cepix_native <= 0;
+		if(pixel_count == pixel_divisor - 1'd1) begin
+			pixel_count <= 0;
+			cepix_native <= 1;
+		end
+		else pixel_count <= pixel_count + 1'd1;
+	end
+end
+
+reg         cepix_60 = 0;
+reg  [31:0] vclk_60 = 0;
+reg  [31:0] vsum_60 = 0;
+reg         allow60 = 0;
+wire [31:0] vsum_60_next = vsum_60 + vclk_60;
+always @(posedge CLK_VIDEO) begin
+	if(video_reset) begin
+		cepix_60 <= 0;
+		vsum_60 <= 0;
+	end else begin
+		cepix_60 <= 0;
+		vsum_60 <= vsum_60_next;
+		if(vsum_60_next >= video_clock_hz) begin
+			vsum_60 <= vsum_60_next - video_clock_hz;
+			cepix_60 <= 1;
+		end
 	end
 end
 
 always @(posedge CLK_VIDEO) begin
 	reg [31:0] pixcnt = 0, pix60;
 	reg old_sync = 0;
-	reg [31:0] vclk1;
-
-	reg allow60 = 0;
 
 	if(vmode == 7) allow60 <= 1;
-	if(reset) allow60 <= 0;
+	if(video_reset) allow60 <= 0;
 
-	if(reset || status[4] || !allow60) vclk1 <= vratio[vmode];
+	if(video_reset || status[4] || !allow60) vclk_60 <= vratio[vmode];
 	else if(CE_PIXEL) begin
 		old_sync <= VGA_VS;
 		pixcnt <= pixcnt + 1;
@@ -311,19 +411,16 @@ always @(posedge CLK_VIDEO) begin
 			pixcnt <= 0;
 		end
 		
-		if(pix60<5000000) vclk1 <= 5000000;
-		else if(pix60>CLKSYS) vclk1 <= CLKSYS;
-		else vclk1 <= pix60;
+		if(pix60<5000000) vclk_60 <= 5000000;
+		else if(pix60>video_clock_hz) vclk_60 <= video_clock_hz;
+		else vclk_60 <= pix60;
 	end
-
-	vclk <= vclk1;
 end
 
-assign CLK_VIDEO = clk_sys;
-assign CE_PIXEL  = cepix;
+assign CE_PIXEL  = (status[4] || !allow60) ? cepix_native : cepix_60;
 assign VGA_F1 = 0;
 assign VGA_SL = 0;
-assign VGA_SCALER = 1;
+assign VGA_SCALER = 0;
 
 gamma_fast gamma
 (
@@ -360,7 +457,7 @@ wire [31:0] aratio[4] =
 reg         ceaud;
 reg  [31:0] asum, aclk;
 wire [31:0] asum_next = asum + aclk;
-always @(posedge CLK_VIDEO) begin
+always @(posedge clk_sys) begin
 	reg [31:0] aclk1;
 
 	aclk1 <= (status[5] && pixbaseclk_select == 1) ? 1000000 : aratio[pixbaseclk_select];

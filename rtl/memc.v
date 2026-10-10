@@ -59,13 +59,14 @@ module memc
 
 	// vidc interface 
 	input         flybk,
-	input         hsync,
 
 	input         sndrq,
 	output        sndak,
 
 	input         vidrq,
 	output        vidak,
+	input         currq,
+	output        curak,
 	output        vidw, // write to the video registers.
 
 	// ioc interface
@@ -106,7 +107,7 @@ reg			cpu_load;
 
 reg [3:0]	dma_ack_r;
 wire        dma_in_progress = cur_load | vid_load | snd_load;
-wire        dma_request     = (~flybk & vidrq) | (memc_control[11] & sndrq);
+wire        dma_request     = (~flybk & (vidrq | currq)) | (memc_control[11] & sndrq);
 reg         dma_request_r;    
 wire        video_dma_ip    = cur_load | vid_load;
 wire        sound_dma_ip    = snd_load;
@@ -315,17 +316,9 @@ always @(posedge clkcpu) begin : block
 		
 			// priority is to video over sound.
 			if (vidrq  & ~dma_in_progress & ~cpu_load) begin
-	 			
-				if (hsync == 1'b1) begin 
-				   
-					vid_load <= 1'b1;
-				
-				end else begin
-				
-					cur_load <= 1'b1;
-				
-				end
-				
+				vid_load <= 1'b1;
+			end else if (currq & ~dma_in_progress & ~cpu_load) begin
+				cur_load <= 1'b1;
 			end else if (sndrq  & ~dma_in_progress & ~cpu_load) begin
 				
 				snd_load <= 1'b1;
@@ -341,7 +334,7 @@ always @(posedge clkcpu) begin : block
 					// advance the pointer to the next location.
 					vid_address <= vid_address + 19'd4;
 					
-			end else if ((vidak & cur_load) == 1'b1) begin 
+			end else if ((curak & cur_load) == 1'b1) begin
 			
 				// advance the cursor pointer to the next location.
 				cur_address <= cur_address + 19'd4;
@@ -430,7 +423,8 @@ wire   vidc_cs       = spvmd & (cpu_address[25:21] == 5'b11010);                
 assign rom_low_cs    = (cpu_address[25:22] == 4'b1101);                                                // 3400000 - 37FFFFF
 assign romcs         = ((cpu_address[25:23] == 3'b111) | (cpu_address[25:19] == 7'h00) & rom_overlay); // 3800000 - 3FFFFFF
 
-assign vidak         = cpu_load ? 1'b0 : video_dma_ip & mem_ack_i;  
+assign vidak         = cpu_load ? 1'b0 : vid_load & mem_ack_i;
+assign curak         = cpu_load ? 1'b0 : cur_load & mem_ack_i;
 assign sndak         = cpu_load ? 1'b0 : sound_dma_ip & mem_ack_i;  
 
 assign sirq_n        = snd_next_valid;
